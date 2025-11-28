@@ -1,0 +1,69 @@
+-How to Implement USB Serial Communication-
+   Teensy Code (Arduino IDE):
+     The Teensy identifies itself as a Virtual COM Port over USB.
+/* void setup() {
+  // Initialize USB Serial at a very high baud rate.
+  // The Teensy 4.1 ignores the number for USB Serial and uses the maximum available, but it's required by the protocol.
+  Serial.begin(115200); 
+  // Initialize your motor drivers, pins, etc. here
+}
+
+void loop() {
+  // 1. Check for data from the Pi
+  if (Serial.available() > 0) {
+    // 2. Read the incoming data until a newline ('\n') character
+    String message = Serial.readStringUntil('\n');
+    
+    // 3. Parse the message (e.g., "M1,255" or "SET,1,255")
+    // This is a critical step. You need a simple protocol.
+    int motorNumber = message.substring(0, 2).toInt();
+    int speedValue = message.substring(3).toInt();
+    
+    // 4. Act on the command
+    setMotorSpeed(motorNumber, speedValue);
+    
+    // 5. (Optional) Send an acknowledgement or data back
+    Serial.println("OK"); // Send a response back to the Pi
+  }
+  
+  // Your non-blocking motor control code here (e.g, reading encoders)
+  // DO NOT USE delay()!
+}
+
+void setMotorSpeed(int motor, int speed) {
+  // Your code to control the motor driver (e.g., analogWrite)
+} */
+      
+
+
+         Raspberry Pi Code (Python using pyserial):
+          install the library: pip install pyserial
+/* import serial
+import time
+
+# Configure the serial connection. The port is often '/dev/ttyACM0'
+# If that doesn't work, list ports with 'ls /dev/tty*' before and after plugging in the Teensy.
+ser = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+ser.flush() # Wait for serial connection to initialize
+
+def send_motor_command(motor_id, speed):
+    # Format a simple string protocol. The '\n' is the end-of-message character.
+    command = f"{motor_id},{speed}\n"
+    ser.write(command.encode('utf-8'))
+    
+    # Optional: Wait for a response from the Teensy for acknowledgement
+    line = ser.readline().decode('utf-8').rstrip()
+    if line == "OK":
+        print("Command acknowledged")
+    else:
+        print(f"Unexpected response: {line}")
+
+try:
+    while True:
+        # Example: Send a command to set motor 1 to speed 200
+        send_motor_command(1, 200)
+        time.sleep(0.1) # Send commands every 100ms
+        
+except KeyboardInterrupt:
+    print("Closing serial connection.")
+    ser.close() */
