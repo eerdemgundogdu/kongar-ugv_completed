@@ -152,13 +152,9 @@ v4l2-ctl --list-devices
 ## 👥 Team
 
 - **Emirhan Oğul**
-- **Yusuf Ziya Bakırkol**
-- **Erdem Gündoğdu**
+- **Tunahan Balkır**
+- **Cihan Erdem Gündoğdu**
 
-## 📄 License
 
-MIT License - see LICENSE file for details
-
----
-
-**Built for Teknofest 2025** 🇹🇷
+**Built for Teknofest 2026** 🇹🇷
+**Build for ELROB 2026**
