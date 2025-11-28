@@ -1,0 +1,346 @@
+#include <stdint.h>
+#include "MIMXRT1062.h"
+
+void SystemInit (void) {
+
+/* Disable Watchdog Power Down Counter */
+    WDOG1->WMCR &= ~(uint16_t) WDOG_WMCR_PDE_MASK;
+    WDOG2->WMCR &= ~(uint16_t) WDOG_WMCR_PDE_MASK;
+
+/* Watchdog disable */
+
+#if (DISABLE_WDOG)
+    if ((WDOG1->WCR & WDOG_WCR_WDE_MASK) != 0U)
+    {
+        WDOG1->WCR &= ~(uint16_t) WDOG_WCR_WDE_MASK;
+    }
+    if ((WDOG2->WCR & WDOG_WCR_WDE_MASK) != 0U)
+    {
+        WDOG2->WCR &= ~(uint16_t) WDOG_WCR_WDE_MASK;
+    }
+    if ((RTWDOG->CS & RTWDOG_CS_CMD32EN_MASK) != 0U)
+    {
+        RTWDOG->CNT = 0xD928C520U; /* 0xD928C520U is the update key */
+    }
+    else
+    {
+        RTWDOG->CNT = 0xC520U;
+        RTWDOG->CNT = 0xD928U;
+    }
+    RTWDOG->TOVAL = 0xFFFF;
+    RTWDOG->CS = (uint32_t) ((RTWDOG->CS) & ~RTWDOG_CS_EN_MASK) | RTWDOG_CS_UPDATE_MASK;
+#endif
+
+    /* Disable Systick which might be enabled by bootrom */
+    if ((SysTick->CTRL & SysTick_CTRL_ENABLE_Msk) != 0U)
+    {
+        SysTick->CTRL &= ~SysTick_CTRL_ENABLE_Msk;
+    }
+
+/* Enable instruction and data caches */
+#if defined(__ICACHE_PRESENT) && __ICACHE_PRESENT
+    if (SCB_CCR_IC_Msk != (SCB_CCR_IC_Msk & SCB->CCR)) {
+        SCB_InvalidateICache();
+        SCB_EnableICache();
+    }
+#endif
+#if defined(__DCACHE_PRESENT) && __DCACHE_PRESENT
+    if (SCB_CCR_DC_Msk != (SCB_CCR_DC_Msk & SCB->CCR)) {
+        SCB_InvalidateDCache();
+        SCB_EnableDCache();
+    }
+#endif
+
+    SystemInitHook();
+}
+
+/* ----------------------------------------------------------------------------
+   -- SystemInitHook()
+   ---------------------------------------------------------------------------- */
+
+__attribute__ ((weak)) void SystemInitHook (void) {
+
+    // ITCM and DTCM enable
+    IOMUXC_GPR->GPR16 |= IOMUXC_GPR_GPR16_INIT_ITCM_EN(1) | IOMUXC_GPR_GPR16_INIT_DTCM_EN(1);
+
+    // Fuse konfigurasyonunu kullan
+    IOMUXC_GPR->GPR16 &= ~IOMUXC_GPR_GPR16_FLEXRAM_BANK_CFG_SEL_MASK;
+    IOMUXC_GPR->GPR16 |= IOMUXC_GPR_GPR16_FLEXRAM_BANK_CFG_SEL(0);
+
+    PLL_ARM_CLK_Init();
+    PLL_SYS_CLK_Init();
+    PLL_USB1_CLK_Init();
+    PLL_VIDEO_CLK_Init();
+
+    USDHC1_CLK_Init();
+    USDHC2_CLK_Init();
+    CSI_CLK_Init();
+    LPSPI_CLK_Init();
+    TRACE_CLK_Init();
+    LPI2C_CLK_Init();
+    CAN_CLK_Init();
+    UART_CLK_Init();
+    LCDIF_CLK_Init();
+
+    __DSB();
+    __ISB();
+
+}
+
+void PLL_ARM_CLK_Init(void) {
+
+    // AHB, IPG ve PERCLK saat kaynaklarini PLL_ARM'den OSC'ye cevir.
+    CCM->CSCMR1 = ( CCM->CSCMR1 & ~CCM_CSCMR1_PERCLK_CLK_SEL_MASK ) | CCM_CSCMR1_PERCLK_CLK_SEL(1);
+
+    if(!(CCM->CBCDR & CCM_CBCDR_PERIPH_CLK_SEL_MASK)) {
+        if(((CCM->CBCDR & CCM_CBCDR_PERIPH_CLK2_PODF_MASK) != CCM_CBCDR_PERIPH_CLK2_PODF(0))) {
+            CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_PERIPH_CLK2_PODF_MASK ) | CCM_CBCDR_PERIPH_CLK2_PODF(0);
+            (void)CCM->CBCDR;
+        }
+
+        CCM->CBCMR = ( CCM->CBCMR & ~CCM_CBCMR_PERIPH_CLK2_SEL_MASK ) | CCM_CBCMR_PERIPH_CLK2_SEL(1); // OSC'ye gec.
+        while (CCM->CDHIPR & CCM_CDHIPR_PERIPH2_CLK_SEL_BUSY_MASK){};
+
+        CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_PERIPH_CLK_SEL_MASK ) | CCM_CBCDR_PERIPH_CLK_SEL(1); // PERIPH_CLK2'ye gec.
+        while (CCM->CDHIPR & CCM_CDHIPR_PERIPH_CLK_SEL_BUSY_MASK){};
+    }
+    
+    // PLL_ARM ayari
+    CCM_ANALOG->PLL_ARM_SET |= CCM_ANALOG_PLL_ARM_BYPASS_MASK; // PLL bypass enable
+    
+    CCM_ANALOG->PLL_ARM_SET |= CCM_ANALOG_PLL_ARM_POWERDOWN_MASK; // PLL'i Kapat
+
+    CCM_ANALOG->PLL_ARM_CLR |= CCM_ANALOG_PLL_ARM_DIV_SELECT_MASK;
+    CCM_ANALOG->PLL_ARM_SET |= CCM_ANALOG_PLL_ARM_DIV_SELECT(88); // Carpan Degeri Ayari ( 24MHz * 88 / 2 = 1056MHz )
+
+    CCM->CACRR = ( CCM->CACRR & ~CCM_CACRR_ARM_PODF_MASK ) | CCM_CACRR_ARM_PODF(1); // Saat Bolucu Degeri Ayari ( 1056MHz / ( 1+1 ) = 528MHz )
+    while (CCM->CDHIPR & CCM_CDHIPR_ARM_PODF_BUSY_MASK){}
+
+    CCM_ANALOG->PLL_ARM_CLR |= CCM_ANALOG_PLL_ARM_POWERDOWN_MASK; // PLL'e Guc Ver
+
+    CCM_ANALOG->PLL_ARM_SET |= CCM_ANALOG_PLL_ARM_ENABLE_MASK; // PLL'i Aktive Et
+
+    while (!(CCM_ANALOG->PLL_ARM & CCM_ANALOG_PLL_ARM_LOCK_MASK)){} //PLL Kilitlenene Kadar Bekle
+    
+    CCM_ANALOG->PLL_ARM_CLR |= CCM_ANALOG_PLL_ARM_BYPASS_MASK; // PLL bypass disable
+
+    // AHB clock ayari
+    CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_AHB_PODF_MASK ) | CCM_CBCDR_AHB_PODF(3); // ( 528MHz / 4 = 132MHz )
+    while (CCM->CDHIPR & CCM_CDHIPR_AHB_PODF_BUSY_MASK){}
+
+    //IPG clock ayari
+    CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_IPG_PODF_MASK ) | CCM_CBCDR_IPG_PODF(1); // ( 132MHz / 2 = 66MHz )
+    (void)CCM->CBCDR;
+
+    //PERCLK clock ayari
+    CCM->CSCMR1 = ( CCM->CSCMR1 & ~CCM_CSCMR1_PERCLK_PODF_MASK ) | CCM_CSCMR1_PERCLK_PODF(0); // ( 66MHz / 1 = 66MHz )
+    (void)CCM->CSCMR1;
+
+    // AHB, IPG ve PERCLK saat ayarlarinin kaynağını OSC'den PLL_ARM'ye cevir.
+    if((CCM->CBCMR & CCM_CBCMR_PRE_PERIPH_CLK_SEL_MASK) != CCM_CBCMR_PRE_PERIPH_CLK_SEL(3)) {
+        CCM->CBCMR = ( CCM->CBCMR & ~CCM_CBCMR_PRE_PERIPH_CLK_SEL_MASK ) | CCM_CBCMR_PRE_PERIPH_CLK_SEL(3); // PLL1'i PER_PERIPH olarak sec.
+        (void)CCM->CBCMR;
+    }
+
+    CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_PERIPH_CLK_SEL_MASK ) | CCM_CBCDR_PERIPH_CLK_SEL(0); // PRE_PERIPH( PLL1 )'e gec.
+    while (CCM->CDHIPR & CCM_CDHIPR_PERIPH_CLK_SEL_BUSY_MASK){};
+
+    CCM->CSCMR1 = ( CCM->CSCMR1 & ~CCM_CSCMR1_PERCLK_CLK_SEL_MASK ) | CCM_CSCMR1_PERCLK_CLK_SEL(0); // OSC'den IPG'ye gec
+    (void)CCM->CSCMR1;
+
+}
+
+__attribute__((section("CodeQuickAccess"))) void PLL_SYS_CLK_Init(void) {
+
+    FLEXSPI -> MCR0 |= FLEXSPI_MCR0_MDIS_MASK; //FlexSPI Deactive
+
+    // PLL2 altindaki saatler. PLL2 PowerDown oncesi set etmek gerekiyor
+    CCM_ANALOG->PFD_528_SET |=  CCM_ANALOG_PFD_528_PFD0_CLKGATE_MASK | CCM_ANALOG_PFD_528_PFD1_CLKGATE_MASK | 
+                                CCM_ANALOG_PFD_528_PFD2_CLKGATE_MASK | CCM_ANALOG_PFD_528_PFD3_CLKGATE_MASK ;
+
+    CCM_ANALOG->PLL_SYS_SET |= CCM_ANALOG_PLL_SYS_BYPASS_MASK; // PLL bypass enable
+    
+    CCM_ANALOG->PLL_SYS_SET |= CCM_ANALOG_PLL_SYS_POWERDOWN_MASK; // PLL'i Kapat
+
+    CCM_ANALOG->PLL_SYS_CLR |= CCM_ANALOG_PLL_SYS_DIV_SELECT_MASK;
+    CCM_ANALOG->PLL_SYS_SET |= CCM_ANALOG_PLL_SYS_DIV_SELECT(1); // Carpan Degeri Ayari ( 24MHz * 22 = 528MHz )
+
+    // PFD_528_FRAC Clear
+    CCM_ANALOG->PFD_528_CLR |=  CCM_ANALOG_PFD_528_PFD0_FRAC_MASK | CCM_ANALOG_PFD_528_PFD1_FRAC_MASK | 
+                                CCM_ANALOG_PFD_528_PFD2_FRAC_MASK | CCM_ANALOG_PFD_528_PFD3_FRAC_MASK ;
+    
+    // PFD_528_FRAC Set ( PFDn ->  528MHz * 18 / FRAC )
+    // ( PFD0 = 352MHz ), (  PFD1 = 594MHz ), (  PFD2 = 396MHz ), (  PFD3 = 297MHz )
+    CCM_ANALOG->PFD_528_SET |=  CCM_ANALOG_PFD_528_PFD0_FRAC(27) | CCM_ANALOG_PFD_528_PFD1_FRAC(16) | 
+                                CCM_ANALOG_PFD_528_PFD2_FRAC(24) | CCM_ANALOG_PFD_528_PFD3_FRAC(32) ;
+
+    CCM_ANALOG->PLL_SYS_CLR |= CCM_ANALOG_PLL_SYS_POWERDOWN_MASK; // PLL'e Guc Ver
+
+    CCM_ANALOG->PLL_SYS_SET |= CCM_ANALOG_PLL_SYS_ENABLE_MASK; // PLL'i Aktive Et
+
+    while (!(CCM_ANALOG->PLL_SYS & CCM_ANALOG_PLL_SYS_LOCK_MASK)){} //PLL Kilitlenene Kadar Bekle
+    
+    CCM_ANALOG->PLL_SYS_CLR |= CCM_ANALOG_PLL_SYS_BYPASS_MASK; // PLL bypass disable
+
+     // Hersey ayarlanip PLL2 aktif hale geldi. Artik PFD leri acabiliriz.
+    CCM_ANALOG->PFD_528_CLR |=  CCM_ANALOG_PFD_528_PFD0_CLKGATE_MASK | CCM_ANALOG_PFD_528_PFD1_CLKGATE_MASK | 
+                                CCM_ANALOG_PFD_528_PFD2_CLKGATE_MASK | CCM_ANALOG_PFD_528_PFD3_CLKGATE_MASK ;
+
+    // SEMC_CLK ayari
+    if((CCM->CBCDR & CCM_CBCDR_SEMC_ALT_CLK_SEL_MASK) != CCM_CBCDR_SEMC_ALT_CLK_SEL(0)) {
+        CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_SEMC_ALT_CLK_SEL_MASK ) | CCM_CBCDR_SEMC_ALT_CLK_SEL(0); // SEMC_ALT -> PLL2 PFD2
+        (void)CCM->CSCMR1;
+    }
+
+    if((CCM->CBCDR & CCM_CBCDR_SEMC_CLK_SEL_MASK) != CCM_CBCDR_SEMC_CLK_SEL(1)) {
+        CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_SEMC_CLK_SEL_MASK ) | CCM_CBCDR_SEMC_CLK_SEL(1); // SEMC -> SEMC_ALT
+        (void)CCM->CSCMR1;
+    }
+
+    CCM->CBCDR = ( CCM->CBCDR & ~CCM_CBCDR_SEMC_PODF_MASK ) | CCM_CBCDR_SEMC_PODF(2); // ( 396MHz / 3 = 132MHz )
+    while (CCM->CDHIPR & CCM_CDHIPR_SEMC_PODF_BUSY_MASK){}
+
+    // FLEXSPI_CLK ayari
+    if((CCM->CSCMR1 & CCM_CSCMR1_FLEXSPI_CLK_SEL_MASK) != CCM_CSCMR1_FLEXSPI_CLK_SEL(0)) {
+        CCM->CSCMR1 = (CCM->CSCMR1 & ~CCM_CSCMR1_FLEXSPI_CLK_SEL_MASK) | CCM_CSCMR1_FLEXSPI_CLK_SEL(0); // Kaynak olarak SEMC_CLK sec.
+        (void)CCM->CSCMR1;
+    }
+
+    CCM->CSCMR1 = ( CCM->CSCMR1 & ~CCM_CSCMR1_FLEXSPI_PODF_MASK ) | CCM_CSCMR1_FLEXSPI_PODF(1); // ( 132MHz / 2 = 66MHz )
+    (void)CCM->CSCMR1;
+
+    FLEXSPI -> MCR0 &= ~FLEXSPI_MCR0_MDIS_MASK; //FlexSPI Active
+
+}
+
+void PLL_USB1_CLK_Init(void) {
+
+    // PLL3 altindaki saatler. PLL3 PowerDown oncesi set etmek gerekiyor
+    CCM_ANALOG->PFD_480_SET |=  CCM_ANALOG_PFD_480_PFD0_CLKGATE_MASK | CCM_ANALOG_PFD_480_PFD1_CLKGATE_MASK | 
+                                CCM_ANALOG_PFD_480_PFD2_CLKGATE_MASK | CCM_ANALOG_PFD_480_PFD3_CLKGATE_MASK ;
+    
+    CCM_ANALOG->PLL_USB1_SET |= CCM_ANALOG_PLL_USB1_BYPASS_MASK;
+
+    CCM_ANALOG->PLL_USB1_CLR |= CCM_ANALOG_PLL_USB1_POWER_MASK; // Neden digerlerinde powerdown iken bunda powerup bilmiyorum.
+
+    CCM_ANALOG->PLL_USB1_CLR |= CCM_ANALOG_PLL_USB1_DIV_SELECT_MASK;
+    CCM_ANALOG->PLL_USB1_SET |= CCM_ANALOG_PLL_USB1_DIV_SELECT(0);
+
+    CCM_ANALOG->PFD_480_CLR |=  CCM_ANALOG_PFD_480_PFD0_FRAC_MASK | CCM_ANALOG_PFD_480_PFD1_FRAC_MASK | 
+                                CCM_ANALOG_PFD_480_PFD2_FRAC_MASK | CCM_ANALOG_PFD_480_PFD3_FRAC_MASK ;
+    
+    // PFD_480_FRAC Set ( PFDn ->  480MHz * 18 / FRAC )
+    // ( PFD0 = 720 ), ( PFD1 = 664.6153.. ), ( PFD2 = 508.2352.. ), ( PFD3 = 454.7368.. ) Bunlar Reference Manueldeki Degerler
+    CCM_ANALOG->PFD_480_SET |=  CCM_ANALOG_PFD_480_PFD0_FRAC(12) | CCM_ANALOG_PFD_480_PFD1_FRAC(13) | 
+                                CCM_ANALOG_PFD_480_PFD2_FRAC(17) | CCM_ANALOG_PFD_480_PFD3_FRAC(19) ;
+
+    CCM_ANALOG->PLL_USB1_SET |= CCM_ANALOG_PLL_USB1_POWER_MASK;
+
+    CCM_ANALOG->PLL_USB1_SET |= CCM_ANALOG_PLL_USB1_ENABLE_MASK;
+
+    while(!(CCM_ANALOG->PLL_USB1 & CCM_ANALOG_PLL_USB1_LOCK_MASK)){}
+
+    CCM_ANALOG->PLL_USB1_CLR |= CCM_ANALOG_PLL_USB1_BYPASS_MASK;
+
+    CCM_ANALOG->PFD_480_CLR |=  CCM_ANALOG_PFD_480_PFD0_CLKGATE_MASK | CCM_ANALOG_PFD_480_PFD1_CLKGATE_MASK | 
+                                CCM_ANALOG_PFD_480_PFD2_CLKGATE_MASK | CCM_ANALOG_PFD_480_PFD3_CLKGATE_MASK ;
+
+}
+
+void PLL_VIDEO_CLK_Init(void) {
+    // PLL5 Ayarlanacak
+    // TRACE_CLK icin lazim
+}
+
+void USDHC1_CLK_Init(void) {
+    if((CCM->CSCMR1 & CCM_CSCMR1_USDHC1_CLK_SEL_MASK) != CCM_CSCMR1_USDHC1_CLK_SEL(0)) {
+        CCM->CSCMR1 = ( CCM->CSCMR1 & ~CCM_CSCMR1_USDHC1_CLK_SEL_MASK ) | CCM_CSCMR1_USDHC1_CLK_SEL(0);
+        (void)CCM->CSCMR1;
+    }
+
+    CCM->CSCDR1 = ( CCM->CSCDR1 & ~CCM_CSCDR1_USDHC1_PODF_MASK ) | CCM_CSCDR1_USDHC1_PODF(5);
+    (void)CCM->CSCDR1;
+}
+
+void USDHC2_CLK_Init(void) {
+    if((CCM->CSCMR1 & CCM_CSCMR1_USDHC2_CLK_SEL_MASK) != CCM_CSCMR1_USDHC2_CLK_SEL(0)) {
+        CCM->CSCMR1 = ( CCM->CSCMR1 & ~CCM_CSCMR1_USDHC2_CLK_SEL_MASK ) | CCM_CSCMR1_USDHC2_CLK_SEL(0);
+        (void)CCM->CSCMR1;
+    }
+
+    CCM->CSCDR1 = ( CCM->CSCDR1 & ~CCM_CSCDR1_USDHC2_PODF_MASK ) | CCM_CSCDR1_USDHC2_PODF(5);
+    (void)CCM->CSCDR1;
+}
+
+void CSI_CLK_Init(void) {
+    if((CCM->CSCDR3 & CCM_CSCDR3_CSI_CLK_SEL_MASK) != CCM_CSCDR3_CSI_CLK_SEL(2)) {
+        CCM->CSCDR3 = ( CCM->CSCDR3 & ~CCM_CSCDR3_CSI_CLK_SEL_MASK ) | CCM_CSCDR3_CSI_CLK_SEL(2);
+        (void)CCM->CSCDR3;
+    }
+
+    CCM->CSCDR3 = ( CCM->CSCDR3 & ~CCM_CSCDR3_CSI_PODF_MASK ) | CCM_CSCDR3_CSI_PODF(1);
+    (void)CCM->CSCDR3;
+}
+
+void LPSPI_CLK_Init(void) {
+    if((CCM->CBCMR & CCM_CBCMR_LPSPI_CLK_SEL_MASK) != CCM_CBCMR_LPSPI_CLK_SEL(2)) {
+        CCM->CBCMR = ( CCM->CBCMR & ~CCM_CBCMR_LPSPI_CLK_SEL_MASK ) | CCM_CBCMR_LPSPI_CLK_SEL(2);
+        (void)CCM->CBCMR;
+    }
+
+    CCM->CBCMR = ( CCM->CBCMR & ~CCM_CBCMR_LPSPI_PODF_MASK ) | CCM_CBCMR_LPSPI_PODF(7);
+    (void)CCM->CBCMR;
+}
+
+void TRACE_CLK_Init(void) {
+    if((CCM->CBCMR & CCM_CBCMR_TRACE_CLK_SEL_MASK) != CCM_CBCMR_TRACE_CLK_SEL(0)) {
+        CCM->CBCMR = ( CCM->CBCMR & ~CCM_CBCMR_TRACE_CLK_SEL_MASK ) | CCM_CBCMR_TRACE_CLK_SEL(0);
+        (void)CCM->CBCMR;
+    }
+
+    CCM->CSCDR1 = ( CCM->CSCDR1 & ~CCM_CSCDR1_TRACE_PODF_MASK ) | CCM_CSCDR1_TRACE_PODF(3);
+    (void)CCM->CSCDR1;
+}
+
+void LPI2C_CLK_Init(void) {
+    if((CCM->CSCDR2 & CCM_CSCDR2_LPI2C_CLK_SEL_MASK) != CCM_CSCDR2_LPI2C_CLK_SEL(0)) {
+        CCM->CSCDR2 = ( CCM->CSCDR2 & ~CCM_CSCDR2_LPI2C_CLK_SEL_MASK ) | CCM_CSCDR2_LPI2C_CLK_SEL(0);
+        (void)CCM->CSCDR2;
+    }
+
+    CCM->CSCDR2 = ( CCM->CSCDR2 & ~CCM_CSCDR2_LPI2C_CLK_PODF_MASK ) | CCM_CSCDR2_LPI2C_CLK_PODF(0);
+    (void)CCM->CSCDR2;
+}
+
+void CAN_CLK_Init(void) {
+    if((CCM->CSCMR2 & CCM_CSCMR2_CAN_CLK_SEL_MASK) != CCM_CSCMR2_CAN_CLK_SEL(2)) {
+        CCM->CSCMR2 = ( CCM->CSCMR2 & ~CCM_CSCMR2_CAN_CLK_SEL_MASK ) | CCM_CSCMR2_CAN_CLK_SEL(2);
+        (void)CCM->CSCMR2;
+    }
+
+    CCM->CSCMR2 = ( CCM->CSCMR2 & ~CCM_CSCMR2_CAN_CLK_PODF_MASK ) | CCM_CSCMR2_CAN_CLK_PODF(1);
+    (void)CCM->CSCMR2;
+}
+
+void UART_CLK_Init(void) {
+    if((CCM->CSCDR1 & CCM_CSCDR1_UART_CLK_SEL_MASK) != CCM_CSCDR1_UART_CLK_SEL(1)) {
+        CCM->CSCDR1 = ( CCM->CSCDR1 & ~CCM_CSCDR1_UART_CLK_SEL_MASK ) | CCM_CSCDR1_UART_CLK_SEL(1);
+        (void)CCM->CSCDR1;
+    }
+
+    CCM->CSCDR1 = ( CCM->CSCDR1 & ~CCM_CSCDR1_UART_CLK_PODF_MASK ) | CCM_CSCDR1_UART_CLK_PODF(0);
+    (void)CCM->CSCDR1;
+}
+
+void LCDIF_CLK_Init(void) {
+    if((CCM->CSCDR2 & CCM_CSCDR2_LCDIF_PRE_CLK_SEL_MASK) != CCM_CSCDR2_LCDIF_PRE_CLK_SEL(2)) {
+        CCM->CSCDR2 = ( CCM->CSCDR2 & ~CCM_CSCDR2_LCDIF_PRE_CLK_SEL_MASK ) | CCM_CSCDR2_LCDIF_PRE_CLK_SEL(2);
+        (void)CCM->CSCDR2;
+    }
+
+    CCM->CSCDR2 = ( CCM->CSCDR2 & ~CCM_CSCDR2_LCDIF_PRED_MASK ) | CCM_CSCDR2_LCDIF_PRED(1);
+    (void)CCM->CSCDR2;
+
+    CCM->CBCMR = ( CCM->CBCMR & ~CCM_CBCMR_LCDIF_PODF_MASK )  | CCM_CBCMR_LCDIF_PODF(1);
+    (void)CCM->CBCMR;
+}
