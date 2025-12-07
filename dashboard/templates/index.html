@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UGV Dashboard - Teknofest 2026</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</head>
+<body>
+    <div class="dashboard">
+        <header class="header">
+            <h1>🚗 UGV Control Dashboard</h1>
+            <div class="connection-status" id="connection-status">
+                <span class="status-dot disconnected"></span>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="panel-grid">
+                <!-- Telemetry Panel -->
+                <section class="panel telemetry-panel">
+                    <h2>📊 Telemetry</h2>
+                    <div class="telemetry-grid">
+                        <div class="telemetry-item">
+                            <span class="label">Position X</span>
+                            <span class="value" id="pos-x">0.00 m</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Position Y</span>
+                            <span class="value" id="pos-y">0.00 m</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Heading</span>
+                            <span class="value" id="heading">0.00°</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Linear Vel</span>
+                            <span class="value" id="lin-vel">0.00 m/s</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Angular Vel</span>
+                            <span class="value" id="ang-vel">0.00 rad/s</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="label">Battery</span>
+                            <span class="value" id="battery">100%</span>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Mission State Panel -->
+                <section class="panel state-panel">
+                    <h2>🎯 Mission State</h2>
+                    <div class="mission-state" id="mission-state">INIT</div>
+                    <div class="state-buttons">
+                        <button class="cmd-btn" onclick="sendCommand('INIT')">INIT</button>
+                        <button class="cmd-btn" onclick="sendCommand('START')">START</button>
+                        <button class="cmd-btn emergency" onclick="sendCommand('STOP')">STOP</button>
+                        <button class="cmd-btn" onclick="sendCommand('GPS_NAV')">GPS NAV</button>
+                    </div>
+                </section>
+
+                <!-- Manual Control Panel -->
+                <section class="panel control-panel">
+                    <h2>🎮 Manual Control</h2>
+                    <div class="joystick-container">
+                        <div class="control-buttons">
+                            <div class="control-row">
+                                <button class="control-btn" onmousedown="startMove(0.3, 0)" onmouseup="stopMove()" ontouchstart="startMove(0.3, 0)" ontouchend="stopMove()">▲</button>
+                            </div>
+                            <div class="control-row">
+                                <button class="control-btn" onmousedown="startMove(0, 0.5)" onmouseup="stopMove()" ontouchstart="startMove(0, 0.5)" ontouchend="stopMove()">◀</button>
+                                <button class="control-btn stop-btn" onclick="stopMove()">■</button>
+                                <button class="control-btn" onmousedown="startMove(0, -0.5)" onmouseup="stopMove()" ontouchstart="startMove(0, -0.5)" ontouchend="stopMove()">▶</button>
+                            </div>
+                            <div class="control-row">
+                                <button class="control-btn" onmousedown="startMove(-0.3, 0)" onmouseup="stopMove()" ontouchstart="startMove(-0.3, 0)" ontouchend="stopMove()">▼</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Waypoints Panel -->
+                <section class="panel waypoints-panel">
+                    <h2>📍 Waypoints</h2>
+                    <div class="waypoint-form">
+                        <input type="text" id="wp-name" placeholder="Name">
+                        <input type="number" id="wp-lat" placeholder="Latitude" step="0.000001">
+                        <input type="number" id="wp-lon" placeholder="Longitude" step="0.000001">
+                        <button onclick="addWaypoint()">Add</button>
+                    </div>
+                    <ul class="waypoint-list" id="waypoint-list"></ul>
+                </section>
+
+                <!-- IMU Panel -->
+                <section class="panel imu-panel">
+                    <h2>📐 IMU Data</h2>
+                    <div class="imu-grid">
+                        <div class="imu-item"><span>Accel X:</span><span id="imu-ax">0.00</span></div>
+                        <div class="imu-item"><span>Accel Y:</span><span id="imu-ay">0.00</span></div>
+                        <div class="imu-item"><span>Accel Z:</span><span id="imu-az">0.00</span></div>
+                        <div class="imu-item"><span>Gyro X:</span><span id="imu-gx">0.00</span></div>
+                        <div class="imu-item"><span>Gyro Y:</span><span id="imu-gy">0.00</span></div>
+                        <div class="imu-item"><span>Gyro Z:</span><span id="imu-gz">0.00</span></div>
+                    </div>
+                </section>
+
+                <!-- Events Log -->
+                <section class="panel events-panel">
+                    <h2>📜 Events Log</h2>
+                    <ul class="event-list" id="event-list"></ul>
+                </section>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <span>Teknofest UGV 2026 | Team KONGAR</span>
+        </footer>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
