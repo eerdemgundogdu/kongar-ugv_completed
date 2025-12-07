@@ -1,0 +1,13 @@
+# Dataset Config
+
+path: ./datasets/teknofest_parkour
+train: images/train  # train images (relative to 'path') 
+val: images/val  # val images (relative to 'path') 
+
+# Classes
+names:
+  0: obstacle
+  1: ramp
+  2: traffic_sign
+  3: parking_spot
+  4: pedestrian
