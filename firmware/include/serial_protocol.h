@@ -45,6 +45,7 @@ public:
     void update();
     void sendOdom(float x, float y, float theta, float lin_vel, float ang_vel);
     void sendImu(float ax, float ay, float az, float gx, float gy, float gz);
+    void sendBattery(float percent);
     void sendHeartbeat();
     
     bool isCmdVelAvailable();

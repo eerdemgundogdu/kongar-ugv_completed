@@ -1,5 +1,5 @@
-#include <Arduino_FreeRTOS.h>
-#include <semphr.h>
+#include <Arduino.h>
+#include <TeensyThreads.h>
 #include <Encoder.h>
 #include "config.h"
 #include "motor_driver.h"
@@ -20,119 +20,100 @@ PIDController pidRight(PID_KP, PID_KI, PID_KD);
 
 Watchdog watchdog(WATCHDOG_TIMEOUT_MS);
 SerialProtocol serialProtocol(Serial);
-SPIHandler spiHandler(10); // CS Pin 10
+SPIHandler spiHandler(IMU_CS_PIN);
 
-// Shared Data
-SemaphoreHandle_t xMutexCmd;
-float targetLinearVel = 0.0f;
-float targetAngularVel = 0.0f;
+// Shared Data with mutex protection
+Threads::Mutex cmdMutex;
+volatile float targetLinearVel = 0.0f;
+volatile float targetAngularVel = 0.0f;
 
-// Task Handles
-TaskHandle_t xTaskMotorHandle;
-TaskHandle_t xTaskSensorsHandle;
-TaskHandle_t xTaskCommsHandle;
-TaskHandle_t xTaskIMUHandle;
-
-// Task Prototypes
-void TaskMotor(void *pvParameters);
-void TaskSensors(void *pvParameters);
-void TaskComms(void *pvParameters);
-void TaskIMU(void *pvParameters);
-
-// Robot Constants (Should be in config.h but defining here for now)
-#define WHEEL_RADIUS 0.05f // meters
-#define WHEEL_BASE 0.30f   // meters
-#define TICKS_PER_REV 1000.0f
-
-void setup() {
-    Serial.begin(115200);
-    
-    motorLeft.begin();
-    motorRight.begin();
-    spiHandler.begin();
-    
-    xMutexCmd = xSemaphoreCreateMutex();
-    
-    // Create Tasks
-    // Priorities: Motor (High) > IMU (Med) > Sensors (Med) > Comms (Low)
-    xTaskCreate(TaskMotor, "Motor", 512, NULL, 4, &xTaskMotorHandle); // Increased stack for float math
-    xTaskCreate(TaskIMU, "IMU", 256, NULL, 3, &xTaskIMUHandle);
-    xTaskCreate(TaskSensors, "Sensors", 512, NULL, 2, &xTaskSensorsHandle);
-    xTaskCreate(TaskComms, "Comms", 512, NULL, 1, &xTaskCommsHandle);
-    
-    vTaskStartScheduler();
-}
-
-void loop() {
-    // Empty - FreeRTOS handles everything
-}
-
-// Global variables for Odometry sharing (could be protected by mutex but single writer/reader pattern often ok for simple floats)
-// Using volatile for safety
+// Odometry data
 volatile float currentLeftVel = 0.0f;
 volatile float currentRightVel = 0.0f;
 volatile float odomX = 0.0f;
 volatile float odomY = 0.0f;
 volatile float odomTheta = 0.0f;
 
-void TaskMotor(void *pvParameters) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(20); // 50Hz Control Loop
-    float dt = 0.02f;
+// Battery data
+volatile float batteryVoltage = 12.0f;
+volatile float batteryPercent = 100.0f;
+
+// Thread IDs
+int motorThreadId;
+int sensorsThreadId;
+int commsThreadId;
+int imuThreadId;
+int batteryThreadId;
+
+float readBatteryVoltage() {
+    int rawAdc = analogRead(BATTERY_ADC_PIN);
+    float voltage = (rawAdc / BATTERY_ADC_RESOLUTION) * BATTERY_REFERENCE_VOLTAGE * BATTERY_VOLTAGE_DIVIDER;
+    return voltage;
+}
+
+float voltageToPercent(float voltage) {
+    float percent = ((voltage - BATTERY_EMPTY_VOLTAGE) / (BATTERY_FULL_VOLTAGE - BATTERY_EMPTY_VOLTAGE)) * 100.0f;
+    return constrain(percent, 0.0f, 100.0f);
+}
+
+void motorThread() {
+    const unsigned long interval = 1000 / MOTOR_LOOP_HZ;
+    float dt = 1.0f / MOTOR_LOOP_HZ;
     
-    for (;;) {
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    while (1) {
+        unsigned long start = millis();
         
         if (watchdog.isTimedOut()) {
             motorLeft.stop();
             motorRight.stop();
             pidLeft.reset();
             pidRight.reset();
+            threads.delay(interval);
             continue;
         }
         
         float linear, angular;
-        if (xSemaphoreTake(xMutexCmd, pdMS_TO_TICKS(5)) == pdTRUE) {
+        {
+            Threads::Scope lock(cmdMutex);
             linear = targetLinearVel;
             angular = targetAngularVel;
-            xSemaphoreGive(xMutexCmd);
-        } else {
-            continue;
         }
         
-        // Kinematics: Target Wheel Velocities (m/s)
+        // Clamp velocities
+        linear = constrain(linear, -MAX_LINEAR_VEL, MAX_LINEAR_VEL);
+        angular = constrain(angular, -MAX_ANGULAR_VEL, MAX_ANGULAR_VEL);
+        
+        // Differential drive kinematics
         float targetLeftVel = linear - (angular * WHEEL_BASE / 2.0f);
         float targetRightVel = linear + (angular * WHEEL_BASE / 2.0f);
         
-        // PID Compute
-        // Output of PID is usually PWM or Voltage. Assuming -100 to 100 range for setSpeed
-        // We need measured velocity. Let's use the global variables updated by TaskSensors
-        // Note: There's a 1-cycle delay here, which is fine.
-        
+        // PID compute
         float outputLeft = pidLeft.compute(targetLeftVel, currentLeftVel, dt);
         float outputRight = pidRight.compute(targetRightVel, currentRightVel, dt);
         
-        // Feed Forward (optional but good for responsiveness)
-        // float ffLeft = targetLeftVel * KV; 
-        
-        int pwmLeft = (int)(outputLeft * 100.0f); // Scaling factor needs tuning
-        int pwmRight = (int)(outputRight * 100.0f);
+        // Scale and apply
+        int pwmLeft = (int)constrain(outputLeft * 100.0f, -100.0f, 100.0f);
+        int pwmRight = (int)constrain(outputRight * 100.0f, -100.0f, 100.0f);
         
         motorLeft.setSpeed(pwmLeft);
         motorRight.setSpeed(pwmRight);
+        
+        unsigned long elapsed = millis() - start;
+        if (elapsed < interval) {
+            threads.delay(interval - elapsed);
+        }
     }
 }
 
-void TaskSensors(void *pvParameters) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(20); // 50Hz Update
-    float dt = 0.02f;
+void sensorsThread() {
+    const unsigned long interval = 1000 / SENSOR_LOOP_HZ;
+    float dt = 1.0f / SENSOR_LOOP_HZ;
     
     long prevLeftTicks = 0;
     long prevRightTicks = 0;
     
-    for (;;) {
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    while (1) {
+        unsigned long start = millis();
         
         long currLeftTicks = encoderLeft.read();
         long currRightTicks = encoderRight.read();
@@ -144,8 +125,7 @@ void TaskSensors(void *pvParameters) {
         prevRightTicks = currRightTicks;
         
         // Calculate Velocities (m/s)
-        // Distance per tick = (2 * PI * R) / TICKS_PER_REV
-        float distPerTick = (2.0f * 3.14159f * WHEEL_RADIUS) / TICKS_PER_REV;
+        float distPerTick = (2.0f * PI * WHEEL_RADIUS) / TICKS_PER_REV;
         
         float vLeft = (deltaLeft * distPerTick) / dt;
         float vRight = (deltaRight * distPerTick) / dt;
@@ -159,54 +139,114 @@ void TaskSensors(void *pvParameters) {
         float w = (vRight - vLeft) / WHEEL_BASE;
         
         odomTheta += w * dt;
-        // Normalize Theta
-        while (odomTheta > 3.14159f) odomTheta -= 2.0f * 3.14159f;
-        while (odomTheta < -3.14159f) odomTheta += 2.0f * 3.14159f;
+        // Normalize Theta to [-PI, PI]
+        while (odomTheta > PI) odomTheta -= 2.0f * PI;
+        while (odomTheta < -PI) odomTheta += 2.0f * PI;
         
         odomX += v * cos(odomTheta) * dt;
         odomY += v * sin(odomTheta) * dt;
         
         // Send Odometry
         serialProtocol.sendOdom(odomX, odomY, odomTheta, v, w);
+        
+        unsigned long elapsed = millis() - start;
+        if (elapsed < interval) {
+            threads.delay(interval - elapsed);
+        }
     }
 }
 
-void TaskIMU(void *pvParameters) {
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(20); // 50Hz IMU Update
+void imuThread() {
+    const unsigned long interval = 1000 / IMU_LOOP_HZ;
     
-    for (;;) {
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    while (1) {
+        unsigned long start = millis();
         
         SPIHandler::RawData data = spiHandler.readIMUData();
         
-        // Convert raw to float (assuming scale factors)
-        float ax = data.ax / 16384.0f; // Example scale for +/- 2g
+        // Convert raw to float (MPU6050 scale factors)
+        float ax = data.ax / 16384.0f;  // ±2g
         float ay = data.ay / 16384.0f;
         float az = data.az / 16384.0f;
-        float gx = data.gx / 131.0f;   // Example scale for +/- 250dps
+        float gx = data.gx / 131.0f;    // ±250°/s
         float gy = data.gy / 131.0f;
         float gz = data.gz / 131.0f;
         
         serialProtocol.sendImu(ax, ay, az, gx, gy, gz);
+        
+        unsigned long elapsed = millis() - start;
+        if (elapsed < interval) {
+            threads.delay(interval - elapsed);
+        }
     }
 }
 
-void TaskComms(void *pvParameters) {
-    for (;;) {
+void batteryThread() {
+    while (1) {
+        batteryVoltage = readBatteryVoltage();
+        batteryPercent = voltageToPercent(batteryVoltage);
+        
+        // Send battery status
+        serialProtocol.sendBattery(batteryPercent);
+        
+        // Low battery warning
+        if (batteryPercent < BATTERY_LOW_THRESHOLD) {
+            digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
+        } else {
+            digitalWrite(STATUS_LED_PIN, HIGH);
+        }
+        
+        threads.delay(BATTERY_READ_INTERVAL_MS);
+    }
+}
+
+void commsThread() {
+    while (1) {
         serialProtocol.update();
         
         if (serialProtocol.isCmdVelAvailable()) {
             CmdVelMsg cmd = serialProtocol.getCmdVel();
             
-            if (xSemaphoreTake(xMutexCmd, pdMS_TO_TICKS(10)) == pdTRUE) {
+            {
+                Threads::Scope lock(cmdMutex);
                 targetLinearVel = cmd.linear_x;
                 targetAngularVel = cmd.angular_z;
-                xSemaphoreGive(xMutexCmd);
-                watchdog.feed();
             }
+            watchdog.feed();
         }
         
-        vTaskDelay(pdMS_TO_TICKS(5));
+        threads.delay(COMMS_LOOP_MS);
     }
+}
+
+void setup() {
+    Serial.begin(115200);
+    while (!Serial && millis() < 3000);
+    
+    // Pin modes
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    pinMode(BATTERY_ADC_PIN, INPUT);
+    analogReadResolution(10);
+    
+    // Initialize hardware
+    motorLeft.begin();
+    motorRight.begin();
+    spiHandler.begin();
+    
+    digitalWrite(STATUS_LED_PIN, HIGH);
+    
+    // Start threads with appropriate stack sizes
+    motorThreadId = threads.addThread(motorThread, 0, 4096);
+    sensorsThreadId = threads.addThread(sensorsThread, 0, 4096);
+    imuThreadId = threads.addThread(imuThread, 0, 2048);
+    batteryThreadId = threads.addThread(batteryThread, 0, 2048);
+    commsThreadId = threads.addThread(commsThread, 0, 4096);
+    
+    Serial.println("UGV Firmware v2.0 Ready");
+    Serial.print("Threads started: ");
+    Serial.println(threads.threadsCount());
+}
+
+void loop() {
+    threads.yield();
 }

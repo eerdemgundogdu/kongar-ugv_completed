@@ -14,8 +14,7 @@ public:
     void writeRegister(uint8_t reg, uint8_t value);
     void readBytes(uint8_t reg, uint8_t* buffer, uint8_t len);
     
-    // Placeholder for specific IMU data reading
-    // Assuming a standard 6-axis IMU structure
+    // 6-axis IMU raw data
     struct RawData {
         int16_t ax, ay, az;
         int16_t gx, gy, gz;

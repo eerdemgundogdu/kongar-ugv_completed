@@ -108,6 +108,10 @@ void SerialProtocol::sendImu(float ax, float ay, float az, float gx, float gy, f
     sendPacket(MSG_IMU, (uint8_t*)&msg, sizeof(ImuMsg));
 }
 
+void SerialProtocol::sendBattery(float percent) {
+    sendPacket(MSG_BATTERY, (uint8_t*)&percent, sizeof(float));
+}
+
 void SerialProtocol::sendHeartbeat() {
     sendPacket(MSG_HEARTBEAT, NULL, 0);
 }
