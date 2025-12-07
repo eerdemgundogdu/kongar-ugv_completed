@@ -1,4 +1,0 @@
-slam_toolbox
-navigation2
-nav2_bringup
-cv_bridge
